@@ -38,7 +38,7 @@ html, body, #root { height: 100%; }
 body {
   margin: 0;
   font-family: "EB Garamond", "Iowan Old Style", Georgia, serif;
-  font-size: 16px;
+  font-size: 18.5px;
   color: var(--text);
   background:
     radial-gradient(1200px 600px at 80% -10%, rgba(155,107,184,.12), transparent 60%),
@@ -238,8 +238,8 @@ input:focus, select:focus, textarea:focus {
 
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
+  gap: 12px;
 }
 .card-tile {
   position: relative;
@@ -759,8 +759,11 @@ function validateDeck(deck) {
     if (cnt > 4) issues.push(`${cnt}× ${name} — max 4`);
   }
   for (const { card } of cards) {
-    if (card.legalities && card.legalities.core && card.legalities.core !== 'legal') {
-      issues.push(`${fullName(card)} is niet legal in Core (${card.legalities.core})`);
+    // Only flag cards explicitly marked as banned. Lorcast occasionally
+    // returns 'not_legal' for cards that are actually legal in core
+    // (e.g. Junior Woodchuck Guidebook), so we are lenient here.
+    if (card.legalities && card.legalities.core === 'banned') {
+      issues.push(`${fullName(card)} is banned in Core`);
     }
   }
   return { valid: issues.length === 0, issues, total, inks: [...inks] };
@@ -1537,14 +1540,15 @@ function MatchesPage({ decks, matches, setMatches }) {
       ) : (
         <table className="match-table">
           <thead>
-            <tr><th>Datum</th><th>Mijn deck</th><th>Tegenstander</th><th>Inks</th><th>Resultaat</th><th>Toernooi</th><th></th></tr>
+            <tr><th>Datum</th><th>Speler</th><th>Mijn deck</th><th>Mijn inks</th><th>Tegenstander inks</th><th>Resultaat</th><th>Toernooi</th><th></th></tr>
           </thead>
           <tbody>
             {matches.map(m => (
               <tr key={m.id}>
                 <td>{m.date}</td>
-                <td>{m.deckName}</td>
-                <td>{m.opponentDeck || <span className="faint">—</span>}</td>
+                <td>{m.playerName || <span className="faint">—</span>}</td>
+                <td>{m.deckName || <span className="faint">—</span>}</td>
+                <td>{(m.myInks || []).map(i => <InkChip key={i} name={i} />)}</td>
                 <td>{(m.opponentInks || []).map(i => <InkChip key={i} name={i} />)}</td>
                 <td><span className={`result-${m.result}`}>{m.result}</span></td>
                 <td>{m.tournament || <span className="faint">—</span>}{m.round ? ` · R${m.round}` : ''}</td>
@@ -1569,22 +1573,26 @@ function MatchForm({ decks, initial, onClose, onSave }) {
   const today = new Date().toISOString().slice(0, 10);
   const [form, setForm] = useState(initial || {
     date: today,
+    playerName: '',
     deckId: decks[0] ? decks[0].id : '',
     deckName: decks[0] ? decks[0].name : '',
-    deckInks: decks[0] ? validateDeck(decks[0]).inks : [],
-    opponentDeck: '', opponentInks: [],
+    myInks: decks[0] ? validateDeck(decks[0]).inks : [],
+    opponentInks: [],
     result: 'W', tournament: '', round: '', notes: ''
   });
   function update(k, v) { setForm({ ...form, [k]: v }); }
-  function toggleOppInk(ink) {
-    const cur = form.opponentInks || [];
-    if (cur.includes(ink)) update('opponentInks', cur.filter(i => i !== ink));
-    else if (cur.length < 2) update('opponentInks', [...cur, ink]);
+  function toggleInk(field, ink) {
+    const cur = form[field] || [];
+    if (cur.includes(ink)) update(field, cur.filter(i => i !== ink));
+    else if (cur.length < 2) update(field, [...cur, ink]);
   }
   function pickDeck(id) {
+    if (!id) {
+      setForm({ ...form, deckId: '', deckName: '', myInks: [] });
+      return;
+    }
     const d = decks.find(x => x.id === id);
-    if (d) setForm({ ...form, deckId: d.id, deckName: d.name, deckInks: validateDeck(d).inks });
-    else update('deckId', '');
+    if (d) setForm({ ...form, deckId: d.id, deckName: d.name, myInks: validateDeck(d).inks });
   }
   return (
     <Modal title={initial ? 'Wedstrijd bewerken' : 'Nieuwe wedstrijd'} onClose={onClose}
@@ -1595,28 +1603,37 @@ function MatchForm({ decks, initial, onClose, onSave }) {
     >
       <div className="match-form">
         <label>Datum<input type="date" value={form.date} onChange={e => update('date', e.target.value)} /></label>
-        <label>Mijn deck
-          <select value={form.deckId} onChange={e => pickDeck(e.target.value)}>
-            <option value="">— kies een deck —</option>
-            {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
-        </label>
+        <label>Speler<input value={form.playerName} onChange={e => update('playerName', e.target.value)} placeholder="bv. Jan" /></label>
         <label>Resultaat
           <select value={form.result} onChange={e => update('result', e.target.value)}>
             <option value="W">Win</option><option value="L">Loss</option><option value="T">Tie</option>
           </select>
         </label>
-        <label className="full">Tegenstander deck (vrije tekst)
-          <input value={form.opponentDeck} onChange={e => update('opponentDeck', e.target.value)} placeholder="bv. Amber/Steel Steelsong" />
+
+        <label className="full">Mijn deck (kies opgeslagen óf alleen ink)
+          <select value={form.deckId} onChange={e => pickDeck(e.target.value)}>
+            <option value="">— alleen ink invullen —</option>
+            {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
         </label>
+        <label className="full">Inks van mijn deck (max 2)
+          <div className="row wrap" style={{ paddingTop: 4 }}>
+            {INKS.map(i => (
+              <span key={i} className={`chip ink-${i} ${(form.myInks || []).includes(i) ? 'on' : ''}`}
+                onClick={() => toggleInk('myInks', i)}>{i}</span>
+            ))}
+          </div>
+        </label>
+
         <label className="full">Inks van de tegenstander (max 2)
           <div className="row wrap" style={{ paddingTop: 4 }}>
             {INKS.map(i => (
               <span key={i} className={`chip ink-${i} ${(form.opponentInks || []).includes(i) ? 'on' : ''}`}
-                onClick={() => toggleOppInk(i)}>{i}</span>
+                onClick={() => toggleInk('opponentInks', i)}>{i}</span>
             ))}
           </div>
         </label>
+
         <label>Toernooi (optioneel)<input value={form.tournament} onChange={e => update('tournament', e.target.value)} placeholder="bv. Locals" /></label>
         <label>Ronde (optioneel)<input value={form.round} onChange={e => update('round', e.target.value)} placeholder="3" /></label>
         <label className="full">Notities (optioneel)<textarea rows={3} value={form.notes} onChange={e => update('notes', e.target.value)} /></label>
@@ -1627,6 +1644,8 @@ function MatchForm({ decks, initial, onClose, onSave }) {
 
 // ─── Statistics ───────────────────────────────────────────────────────────────
 function StatsPage({ decks, matches }) {
+  const [tab, setTab] = useState('deck');
+
   const overall = useMemo(() => {
     const w = matches.filter(m => m.result === 'W').length;
     const l = matches.filter(m => m.result === 'L').length;
@@ -1635,10 +1654,11 @@ function StatsPage({ decks, matches }) {
     const wr = total ? Math.round((w / total) * 100) : 0;
     return { w, l, t, total, wr };
   }, [matches]);
+
   const perDeck = useMemo(() => {
     const map = new Map();
     for (const m of matches) {
-      const key = m.deckId || ('name:' + m.deckName);
+      const key = m.deckId || ('name:' + (m.deckName || 'Onbekend'));
       if (!map.has(key)) map.set(key, { id: m.deckId, name: m.deckName || 'Onbekend', w: 0, l: 0, t: 0 });
       const e = map.get(key);
       if (m.result === 'W') e.w++;
@@ -1650,6 +1670,7 @@ function StatsPage({ decks, matches }) {
       return { ...e, total, wr: total ? Math.round((e.w / total) * 100) : 0 };
     }).sort((a, b) => b.total - a.total);
   }, [matches]);
+
   const perMatchup = useMemo(() => {
     const map = new Map();
     for (const m of matches) {
@@ -1667,6 +1688,53 @@ function StatsPage({ decks, matches }) {
     }).sort((a, b) => b.total - a.total);
   }, [matches]);
 
+  // Per-player aggregate with best-deck calculation
+  const perPlayer = useMemo(() => {
+    const map = new Map();
+    for (const m of matches) {
+      const name = (m.playerName || '').trim() || 'Onbekend';
+      if (!map.has(name)) map.set(name, {
+        name,
+        w: 0, l: 0, t: 0,
+        decks: new Map(), // key -> { name, inks, w, l, t }
+      });
+      const e = map.get(name);
+      if (m.result === 'W') e.w++;
+      else if (m.result === 'L') e.l++;
+      else if (m.result === 'T') e.t++;
+
+      // Track decks for this player
+      const inks = (m.myInks || []).slice().sort();
+      const deckKey = m.deckId || (m.deckName ? 'name:' + m.deckName : 'inks:' + inks.join('/'));
+      if (!e.decks.has(deckKey)) {
+        e.decks.set(deckKey, {
+          key: deckKey,
+          name: m.deckName || (inks.length ? inks.join('/') : 'Onbekend'),
+          inks,
+          w: 0, l: 0, t: 0,
+        });
+      }
+      const d = e.decks.get(deckKey);
+      if (m.result === 'W') d.w++;
+      else if (m.result === 'L') d.l++;
+      else if (m.result === 'T') d.t++;
+    }
+    return [...map.values()].map(p => {
+      const total = p.w + p.l + p.t;
+      const wr = total ? Math.round((p.w / total) * 100) : 0;
+      // Find best deck: highest win rate (require at least 2 games)
+      const deckList = [...p.decks.values()].map(d => {
+        const dt = d.w + d.l + d.t;
+        return { ...d, total: dt, wr: dt ? Math.round((d.w / dt) * 100) : 0 };
+      });
+      const eligible = deckList.filter(d => d.total >= 2);
+      const bestDeck = (eligible.length ? eligible : deckList)
+        .slice()
+        .sort((a, b) => b.wr - a.wr || b.total - a.total)[0] || null;
+      return { ...p, total, wr, decks: deckList, bestDeck };
+    }).sort((a, b) => b.total - a.total);
+  }, [matches]);
+
   if (matches.length === 0) {
     return <div>
       <div className="page-header"><div><h1>Statistieken</h1><p>Inzicht in je prestaties.</p></div></div>
@@ -1676,6 +1744,7 @@ function StatsPage({ decks, matches }) {
   return (
     <div>
       <div className="page-header"><div><h1>Statistieken</h1><p>Inzicht in je prestaties.</p></div></div>
+
       <div className="stat-cards">
         <div className="big-stat"><div className="label">Totaal</div><div className="value">{overall.total}</div></div>
         <div className="big-stat"><div className="label">Wins</div><div className="value">{overall.w}</div></div>
@@ -1683,26 +1752,92 @@ function StatsPage({ decks, matches }) {
         <div className="big-stat"><div className="label">Ties</div><div className="value">{overall.t}</div></div>
         <div className="big-stat"><div className="label">Win Rate</div><div className="value">{overall.wr}%</div></div>
       </div>
-      <div className="panel" style={{ marginBottom: 18 }}>
-        <div className="panel-title">Per Deck</div>
-        {perDeck.map(d => (
-          <div key={d.name + (d.id || '')} className="bar-row">
-            <span>{d.name}</span>
-            <div className="bar-track"><div className="bar-fill" style={{ width: `${d.wr}%` }} /></div>
-            <div className="right"><b>{d.wr}%</b> <span className="faint">({d.w}-{d.l}-{d.t})</span></div>
-          </div>
+
+      <div className="row" style={{ gap: 4, marginBottom: 16, borderBottom: '1px solid var(--border-soft)', paddingBottom: 8 }}>
+        {[
+          { id: 'deck',    label: 'Per Deck' },
+          { id: 'matchup', label: 'Per Matchup' },
+          { id: 'player',  label: 'Per Speler' },
+        ].map(t => (
+          <button
+            key={t.id}
+            className={`btn ${tab === t.id ? 'btn-active' : 'btn-ghost'}`}
+            onClick={() => setTab(t.id)}
+          >{t.label}</button>
         ))}
       </div>
-      <div className="panel">
-        <div className="panel-title">Per Matchup (kleur van tegenstander)</div>
-        {perMatchup.map(m => (
-          <div key={m.key} className="bar-row">
-            <div className="row wrap">{m.inks.length ? m.inks.map(i => <InkChip key={i} name={i} />) : <span className="faint">Onbekend</span>}</div>
-            <div className="bar-track"><div className="bar-fill" style={{ width: `${m.wr}%` }} /></div>
-            <div className="right"><b>{m.wr}%</b> <span className="faint">({m.w}-{m.l}-{m.t})</span></div>
-          </div>
-        ))}
-      </div>
+
+      {tab === 'deck' && (
+        <div className="panel">
+          <div className="panel-title">Per Deck</div>
+          {perDeck.map(d => (
+            <div key={d.name + (d.id || '')} className="bar-row">
+              <span>{d.name}</span>
+              <div className="bar-track"><div className="bar-fill" style={{ width: `${d.wr}%` }} /></div>
+              <div className="right"><b>{d.wr}%</b> <span className="faint">({d.w}-{d.l}-{d.t})</span></div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === 'matchup' && (
+        <div className="panel">
+          <div className="panel-title">Per Matchup (kleur van tegenstander)</div>
+          {perMatchup.map(m => (
+            <div key={m.key} className="bar-row">
+              <div className="row wrap">{m.inks.length ? m.inks.map(i => <InkChip key={i} name={i} />) : <span className="faint">Onbekend</span>}</div>
+              <div className="bar-track"><div className="bar-fill" style={{ width: `${m.wr}%` }} /></div>
+              <div className="right"><b>{m.wr}%</b> <span className="faint">({m.w}-{m.l}-{m.t})</span></div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === 'player' && (
+        <div className="panel">
+          <div className="panel-title">Per Speler</div>
+          {perPlayer.length === 0 && <div className="empty-state">Nog geen spelers ingevoerd.</div>}
+          {perPlayer.map(p => (
+            <div key={p.name} style={{ padding: '12px 0', borderBottom: '1px dashed var(--border-soft)' }}>
+              <div className="row spread" style={{ marginBottom: 6 }}>
+                <div style={{ fontFamily: '"Cinzel", serif', fontSize: 16, color: 'var(--text)' }}>{p.name}</div>
+                <div className="right"><b style={{ color: 'var(--accent)' }}>{p.wr}%</b> <span className="faint">({p.w}-{p.l}-{p.t}) · {p.total} games</span></div>
+              </div>
+              <div className="bar-track" style={{ marginBottom: 10 }}>
+                <div className="bar-fill" style={{ width: `${p.wr}%` }} />
+              </div>
+              {p.bestDeck && (
+                <div className="row wrap" style={{ fontSize: 13, color: 'var(--text-dim)', gap: 8 }}>
+                  <span style={{ color: 'var(--text-faint)', fontFamily: '"Cinzel", serif', fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase' }}>Beste deck:</span>
+                  <span>{p.bestDeck.name}</span>
+                  {p.bestDeck.inks && p.bestDeck.inks.map(i => <InkChip key={i} name={i} />)}
+                  <span className="faint">· {p.bestDeck.wr}% ({p.bestDeck.w}-{p.bestDeck.l}-{p.bestDeck.t})</span>
+                </div>
+              )}
+              {p.decks.length > 1 && (
+                <details style={{ marginTop: 8 }}>
+                  <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--text-faint)' }}>
+                    Alle decks van {p.name} ({p.decks.length})
+                  </summary>
+                  <div style={{ marginTop: 8 }}>
+                    {p.decks.slice().sort((a, b) => b.wr - a.wr || b.total - a.total).map(d => (
+                      <div key={d.key} className="bar-row" style={{ gridTemplateColumns: '1fr 1fr 100px' }}>
+                        <div className="row wrap" style={{ gap: 6 }}>
+                          <span>{d.name}</span>
+                          {d.inks && d.inks.map(i => <InkChip key={i} name={i} />)}
+                        </div>
+                        <div className="bar-track"><div className="bar-fill" style={{ width: `${d.wr}%` }} /></div>
+                        <div className="right"><b>{d.wr}%</b> <span className="faint">({d.w}-{d.l}-{d.t})</span></div>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
     </div>
   );
 }
